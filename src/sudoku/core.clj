@@ -1,5 +1,4 @@
-(ns sudoku.core
-  (:gen-class))
+(ns sudoku.core)
 
 (defn row-ok?
   "Return true if the row has no violations."
@@ -69,23 +68,6 @@
   [row col]
   (+ 1 (* (quot row 3) 3) (quot col 3)))
 
-(defn free-score
-  "Scores a cell in the puzzle according to how easy it is to solve."
-  [p row col]
-  (+
-   (-> p
-      (nth row)
-      (->>
-       (filter #(= % 0))
-       count))
-   (->> p
-        (map #(nth % col))
-        (filter #(= % 0))
-        count)
-   (->> (get-block p (row-col2block row col))
-        (filter #(= % 0))
-        count)))
-
 (defn possible?
   "Return a vector of all the possible values for this position."
   [p row col val]
@@ -114,26 +96,18 @@
 (defn make-state
   "Make a map describing the state of the argument position."
   [puz row col]
-  (let [give (given? puz row col)]
-    (cond-> {:r row :c col}
-      give (assoc :given give)
-      (not give) (assoc :possible (possible-vec puz row col)))))
+  {:r row :c col :possible (possible-vec puz row col)})
 
-;;; Fix this to update the puzzle recursively when the state has only one :possible?
 (defn make-problem
   "Create a map that saves the state of puzzle for backtracking."
-  [p]
-  (as-> {:puzzle p} ?s
-    (assoc ?s :state (for [row (range 9)
-                           col (range 9)]
-                       (make-state p row col)))
-    ;; POD update the state.... this is a mess. 
-    (update ?s :state #(reduce (fn [res s]
-                                 (if (contains? s :possible)
-                                   (conj res s)
-                                   res))
-                               []
-                               %))))
+  [puz]
+  (-> (reduce (fn [res [r c]]
+                (if (given? puz r c)
+                  res
+                  (update res :state conj (make-state puz r c))))
+              {:puzzle puz :state []}
+              (for [row (range 9) col (range 9)] (vector row col)))
+      (update :state (fn [s] (sort-by #(-> % :possible count) s)))))
 
 (defn update-puzzle
   "Returns a prob with the puzzle updated"
@@ -153,18 +127,13 @@
           (:state prob)))
 
 (defn solve-deductive-loop
-  "Runs through a loop of solve deductive until there are none left or the problem is solved."
+  "Runs through a loop of solve-deductive until there are none left or the problem is solved."
   [prob]
   (loop [p prob]
     (if (not-any? #(= 1 (count %)) (map :possible (:state p)))
       p
       (recur (-> p solve-deductive :puzzle make-problem)))))
                 
-(defn -main
-  "I don't do a whole lot ... yet."
-  [& args]
-  (println "Hello, World!"))
-
 ;;;============================================= Testing Stuff =======================================
 
 (def example-bad
