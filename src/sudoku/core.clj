@@ -1,17 +1,6 @@
 (ns sudoku.core
   (:gen-class))
 
-(def example
-  [[0 1 5 3 6 0 0 0 0]
-   [3 0 0 2 0 7 4 6 5]
-   [0 0 0 0 0 0 2 1 0]
-   [1 9 0 0 2 0 3 7 6]
-   [8 3 0 9 1 0 5 0 4]
-   [2 0 6 0 0 4 0 0 0]
-   [0 0 3 0 5 1 9 0 7]
-   [0 4 2 6 7 3 0 0 1]
-   [0 0 0 0 9 8 6 0 2]])
-
 (defn row-ok?
   "Return true if the row has no violations."
   [p row-num]
@@ -60,14 +49,13 @@
   "Return true if the block of 9 numbers have no violations."
   [p blk-num]
    (->> (get-block p blk-num)
-       (remove #(= % 0))
-       (apply distinct?)))
+        (remove #(= % 0))
+        (apply distinct?)))
 
 (defn blocks-ok?
   "Return true if all the blocks have no violations."
   [p]
-  (every? #(block-ok? p %) (range 0 8)))
-
+  (every? #(block-ok? p %) (range 1 10)))
 
 (defn puzzle-ok?
   "Return true if the puzzle has no violations."
@@ -108,44 +96,30 @@
        (->> (get-block p (row-col2block row col))
             (not-any? #(= % val)))))
 
+(defn possible-vec
+  "Return a vector of what values are possible in at the argument position."
+  [puz row col]
+  (reduce (fn [res val]
+            (if (possible? puz row col val)
+              (conj res val)
+              res))
+          []
+          (range 1 10)))
+
 (defn given?
   [p row col]
   (let [val (nth (nth p row) col)]
-    (if (zero? val)
-      false
-      val)))
-
-#_(defn make-state
-  "Make a map describing the state of the argument position."
-  [p row col]
-  (as-> {:x row :y col} ?s
-    (if-let [give (given? p row col)] 
-      (assoc ?s :given give)
-      ?s)
-    (assoc ?s :possible
-           (if (:given ?s)
-             []
-             (reduce (fn [res val]
-                       (if (possible? p row col val)
-                         (conj res val)
-                         res))
-                     []
-                     (range 1 10))))))
+    (if (zero? val) false val)))
 
 (defn make-state
   "Make a map describing the state of the argument position."
-  [p row col]
-  (let [give (given? p row col)]
-    (cond-> {:x row :y col}
+  [puz row col]
+  (let [give (given? puz row col)]
+    (cond-> {:r row :c col}
       give (assoc :given give)
-      (not give) (assoc :possible (reduce (fn [res val]
-                                            (if (possible? p row col val)
-                                              (conj res val)
-                                              res))
-                                          []
-                                          (range 1 10))))))
+      (not give) (assoc :possible (possible-vec puz row col)))))
 
-
+;;; Fix this to update the puzzle recursively when the state has only one :possible?
 (defn make-problem
   "Create a map that saves the state of puzzle for backtracking."
   [p]
@@ -153,21 +127,92 @@
     (assoc ?s :state (for [row (range 9)
                            col (range 9)]
                        (make-state p row col)))
+    ;; POD update the state.... this is a mess. 
     (update ?s :state #(reduce (fn [res s]
                                  (if (contains? s :possible)
                                    (conj res s)
                                    res))
                                []
                                %))))
+
+(defn update-puzzle
+  "Returns a prob with the puzzle updated"
+  [prob r c val]
+  (assoc-in prob [:puzzle r c] val))
+
+(defn solve-deductive
+  "Update problem with with all deductively solvable steps."
+  [prob]
+  (reduce (fn [res s]
+            (if (== 1 (-> s :possible count)) ; Update the puzzle with this value.
+              (assoc res :puzzle
+                     (-> (update-puzzle res (:r s) (:c s) (-> s :possible first))
+                         :puzzle))
+              res)) ; Discard choice-point states; they need to be recalculated. 
+          {:puzzle (:puzzle prob) :state []}
+          (:state prob)))
+
+(defn solve-deductive-loop
+  "Runs through a loop of solve deductive until there are none left or the problem is solved."
+  [prob]
+  (loop [p prob]
+    (if (not-any? #(= 1 (count %)) (map :possible (:state p)))
+      p
+      (recur (-> p solve-deductive :puzzle make-problem)))))
                 
-#_(defn make-problem
-  "Create a map that saves the state of puzzle for backtracking."
-  [p]
-  {:puzzle p
-   :state (make-state p)})
-
-
-(Defn -main
+(defn -main
   "I don't do a whole lot ... yet."
   [& args]
   (println "Hello, World!"))
+
+;;;============================================= Testing Stuff =======================================
+
+(def example-bad
+  [[0 1 5 3 6 0 0 0 0]
+   [3 0 0 2 0 7 4 6 5]
+   [0 0 0 0 0 0 2 1 0]
+   [1 9 0 0 2 0 3 7 6]
+   [8 3 0 9 1 0 5 0 4]
+   [2 0 6 0 0 4 0 0 0]
+   [0 0 3 0 5 1 9 0 7]
+   [0 4 2 6 7 3 0 0 1]
+   [0 0 0 0 9 8 6 0 2]])
+
+(def example
+  [[3 0 1 6 0 0 7 0 0]
+   [4 2 0 0 0 0 1 0 0]
+   [0 6 0 0 5 2 0 9 0]
+   [0 8 3 5 1 0 0 4 0]
+   [0 0 0 0 0 0 3 6 0]
+   [5 0 0 4 9 0 0 0 0]
+   [0 0 0 0 2 0 0 0 0]
+   [7 4 0 0 0 5 0 0 9]
+   [0 0 0 0 0 7 0 0 0]])
+
+(def moderate
+  [[0 8 0 0 0 0 0 0 0]
+   [0 4 7 8 0 9 0 0 1]
+   [0 0 1 4 5 0 0 2 0]
+   [8 1 6 7 0 0 5 0 0]
+   [9 0 0 0 0 1 0 0 0]
+   [0 0 0 5 6 0 0 0 0]
+   [0 0 0 0 0 8 0 5 3]
+   [0 0 0 0 0 0 0 8 0]
+   [0 0 0 3 1 0 0 4 6]])
+
+(def hard
+  [[0 1 5 0 0 0 0 0 0]
+   [0 0 0 0 0 0 4 0 5]
+   [0 0 0 0 0 0 2 0 0]
+   [1 0 0 0 0 0 0 0 0]
+   [8 0 0 0 0 0 5 0 4]
+   [2 0 0 0 0 4 0 0 0]
+   [0 0 0 0 5 0 0 0 7]
+   [0 4 2 0 0 0 0 0 0]
+   [0 0 0 0 0 0 0 0 2]])
+
+
+(declare make-problem)
+
+(def prob (make-problem example))
+
