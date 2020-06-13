@@ -79,7 +79,7 @@
             (not-any? #(= % val)))))
 
 (defn possible-vec
-  "Return a vector of what values are possible in at the argument position."
+  "Return a vector of what values are possible at the argument position."
   [puz row col]
   (reduce (fn [res val]
             (if (possible? puz row col val)
@@ -101,19 +101,22 @@
 (defn make-problem
   "Create a map that saves the state of puzzle for backtracking."
   [puz]
-  (-> (reduce (fn [res [r c]]
+  (-> 
+   (reduce (fn [res [r c]]
                 (if (given? puz r c)
                   res
-                  (update res :state conj (make-state puz r c))))
-              {:puzzle puz :state []}
+                  (update res :steps conj (make-state puz r c))))
+              {:puzzle puz :state [] :steps []}
               (for [row (range 9) col (range 9)] (vector row col)))
-      (update :state (fn [s] (sort-by #(-> % :possible count) s)))))
+      (update :steps (fn [s] (sort-by #(-> % :possible count) s)))))
+
 
 (defn update-puzzle
   "Returns a prob with the puzzle updated"
   [prob r c val]
   (assoc-in prob [:puzzle r c] val))
 
+;;; This needs to be updated to save the state. 
 (defn solve-deductive
   "Update problem with with all deductively solvable steps."
   [prob]
@@ -123,16 +126,61 @@
                      (-> (update-puzzle res (:r s) (:c s) (-> s :possible first))
                          :puzzle))
               res)) ; Discard choice-point states; they need to be recalculated. 
-          {:puzzle (:puzzle prob) :state []}
-          (:state prob)))
+          {:puzzle (:puzzle prob) :steps []}
+          (:steps prob)))
 
 (defn solve-deductive-loop
   "Runs through a loop of solve-deductive until there are none left or the problem is solved."
   [prob]
   (loop [p prob]
-    (if (not-any? #(= 1 (count %)) (map :possible (:state p)))
+    (if (not-any? #(= 1 (count %)) (map :possible (:steps p)))
       p
       (recur (-> p solve-deductive :puzzle make-problem)))))
+
+(defn bad-choice?
+  "Return true if the the puzzle cannot be solved as is."
+  [prob]
+  (some empty? (->> prob :steps (map :possible))))
+
+(defn backtrack
+  "Backtrack out to the last unused choice and use it."
+  [prob]
+  (loop [p prob]
+    (cond (-> p :steps empty?)
+          nil, ; No backtracking possible
+          (-> p :state first :choice not-empty)         ; non-empty choice point
+          (-> p
+              (update-puzzle                            ; ...update puzzle...
+               (-> p :state first :row)
+               (-> p :state first :col)
+               (-> p :state first :choice first))
+              (update-in [:state 0] #(-> % rest vec))),  ;...update state and return.
+          :else ; No choice here, just clear the puzzle state and continue. 
+          (recur (-> p
+                     (update-puzzle                            ; ...update puzzle...
+                      (-> p :state first :row)
+                      (-> p :state first :col)
+                      0)
+                     (update p :state (-> rest vec)))))))
+
+(defn solve
+  [prob]
+  (loop [p (solve-deductive-loop prob)]
+    (if (-> p :steps empty?)
+      p, ; solved!
+      (recur (if (bad-choice? p) ; Backtrack
+               (-> p backtrack solve-deductive-loop)
+               (as-> p ?p           ; Go forward from a choice point.
+                 (let [row (-> p :steps first :row)
+                       col (-> p :steps first :col)
+                       choice  (-> p :steps first :possible)
+                       others? (pop choice)]
+                   (update-puzzle ?p row col (first choice))
+                   (update ?p :state conj {:row row :col col :val val :choice choice})
+                   (if others?
+                     (update ?p :state conj {:row row :col col :possible others?})
+                     (update ?p :state pop)))))))))
+  
                 
 ;;;============================================= Testing Stuff =======================================
 
@@ -180,8 +228,4 @@
    [0 4 2 0 0 0 0 0 0]
    [0 0 0 0 0 0 0 0 2]])
 
-
-(declare make-problem)
-
 (def prob (make-problem example))
-

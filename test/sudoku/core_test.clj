@@ -58,7 +58,7 @@
              [6 0 3 4 5 1 9 0 7]
              [9 4 2 6 7 3 8 5 1]
              [5 7 1 4 9 8 6 3 2]],
-            :state
+            :steps
             [{:r 2, :c 5, :possible []}
              {:r 6, :c 1, :possible []}
              {:r 6, :c 7, :possible []}]}
