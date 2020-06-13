@@ -1,4 +1,5 @@
-(ns sudoku.core)
+(ns sudoku.core
+  (:require [hashp.core])) ; Temporary
 
 (defn row-ok?
   "Return true if the row has no violations."
@@ -69,7 +70,7 @@
   (+ 1 (* (quot row 3) 3) (quot col 3)))
 
 (defn possible?
-  "Return a vector of all the possible values for this position."
+  "Return true if val is possible in the argument position."
   [p row col val]
   (and (->> (nth p row)
             (not-any? #(= % val)))
@@ -89,6 +90,7 @@
           (range 1 10)))
 
 (defn given?
+  "Return the value or false if it is zero (unspecified)."
   [p row col]
   (let [val (nth (nth p row) col)]
     (if (zero? val) false val)))
@@ -99,7 +101,7 @@
   {:r row :c col :possible (possible-vec puz row col)})
 
 (defn make-problem
-  "Create a map that saves the state of puzzle for backtracking."
+  "Create a problem map from a puzzle, setting :steps and initialize :state to ()."
   [puz]
   (-> 
    (reduce (fn [res [r c]]
@@ -108,40 +110,50 @@
                   (update res :steps conj (make-state puz r c))))
               {:puzzle puz :state '() :steps []}
               (for [row (range 9) col (range 9)] (vector row col)))
-      (update :steps (fn [s] (sort-by #(-> % :possible count) s)))))
+   (update :steps (fn [s] (sort-by #(-> % :possible count) s)))))
 
+(defn update-problem
+  "Puzzle has been changed; recalculate :steps, preserve :state."
+  [prob]
+  (as-> prob ?p
+   (dissoc ?p :steps)
+   (reduce (fn [prob [r c]]
+             (if (given? (:puzzle prob) r c)
+               prob
+               (update prob :steps conj (make-state (:puzzle prob) r c))))
+           ?p
+           (for [row (range 9) col (range 9)] (vector row col)))
+   (update ?p :steps (fn [s] (sort-by #(-> % :possible count) s)))))
 
 (defn update-puzzle
-  "Returns a prob with the puzzle updated"
-  [prob r c val]
-  (assoc-in prob [:puzzle r c] val))
+  "Return a problem with the puzzle updated."
+  [puz r c val]
+  (assoc-in puz [r c] val))
 
-;;; This needs to be updated to save the state. <=======================================================================
 (defn solve-deductive
-  "Update problem with with all deductively solvable steps."
+  "Update problem with all deductively solvable steps."
   [prob]
-  (reduce (fn [res s]
+  (reduce (fn [prob s]
             (if (== 1 (-> s :possible count)) ; Update the puzzle with this value.
-              (assoc res :puzzle
-                     (-> (update-puzzle res (:r s) (:c s) (-> s :possible first))
-                         :puzzle))
-              res)) ; Discard choice-point states; they need to be recalculated. 
-          {:puzzle (:puzzle prob) :steps []}
+              (let [{:keys [r c possible]} s]
+                (-> prob
+                    (update :puzzle #(update-puzzle % r c (first possible)))
+                    (update :state conj {:r r :c c :val (first possible)}))) ; no :choice here. 
+              prob))
           (:steps prob)))
 
 (defn solve-deductive-loop
-  "Runs through a loop of solve-deductive until there are none left or the problem is solved."
+  "Run through a loop of solve-deductive until there no deductive steps remaining."
   [prob]
   (loop [p prob]
-    (if (not-any? #(= 1 (count %)) (map :possible (:steps p)))
+    (if (not-any? #(= 1 (count %)) (->> p :steps (map :possible)))
       p
-      (recur (-> p solve-deductive :puzzle make-problem)))))
+      (recur (-> p solve-deductive update-problem))))) 
 
 (defn bad-choice?
   "Return true if the the puzzle cannot be solved as is."
   [prob]
   (some empty? (->> prob :steps (map :possible))))
-
 
 (defn backtrack
   "Backtrack out to the last unused choice and use it."
@@ -150,21 +162,17 @@
     (cond (-> p :steps empty?)
           nil, ; No backtracking possible
           (-> p :state first :choice not-empty)   ; A choice point
-          (-> p
-              (update-puzzle                      ; Update puzzle at choice...
-               (-> p :state first :r)
-               (-> p :state first :c)
-               (-> p :state first :choice first)) 
-              (update :state                 ; :state is a list!
+          (let [{:keys [r c choice]} (-> p :state first)]
+            (-> p
+                (update :puzzle #(update-puzzle % r c (first choice))) ; Update puzzle at choice...
+                (update :state                 ; :state is a list!
                       (fn [s] (conj (rest s) ; ...prune the choice made from :choice
-                                    (update (first s) :choice #(-> % rest vec)))))), 
-          :else                                   ; No choice here.
-          (recur (-> p                            ; Just back out of puzzle
-                     (update-puzzle               ; and continue.
-                      (-> p :state first :r)
-                      (-> p :state first :c)
-                      0)
-                     (update p :state pop))))))
+                                    (update (first s) :choice #(-> % rest vec))))))), 
+          :else                                      ; No choice here.
+          (let [{:keys [r c]} (-> p :state first)]   ; Just back out of puzzle
+            (recur (-> p                             ; and continue.
+                       (update :puzzle #(update-puzzle % r c 0))
+                       (update :state pop)))))))
 
 (def diag (atom nil))
 
@@ -180,14 +188,12 @@
           (not p)   :unsolvable   ; No steps left, unsolvable.
           :else (recur (if (bad-choice? p)    ; Backtrack
                          (-> p backtrack solve-deductive-loop)
-                         (as-> p ?p           ; Go forward from a choice point.
-                           (let [row  (-> ?p :steps first :r)
-                                 col  (-> ?p :steps first :c)
-                                 poss (-> ?p :steps first :possible)
-                                 others (-> poss rest vec)]
-                             (update-puzzle ?p row col (first poss))
-                             (update ?p :state conj {:r row :c col :val (first poss) :choice others})
-                             (solve-deductive-loop ?p))))
+                         (let [{:keys [r c possible]} (-> p :steps first)
+                               others (-> possible rest vec)]
+                           (-> p              ; Go forward from a choice point.
+                               (update :puzzle #(update-puzzle % r c (first possible)))
+                               (update :state conj {:r r :c c :val (first possible) :choice others})
+                               solve-deductive-loop)))
                        (inc cnt)))))
                 
 ;;;============================================= Testing Stuff =======================================
