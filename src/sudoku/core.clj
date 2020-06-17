@@ -1,6 +1,8 @@
 (ns sudoku.core
   (:require [hashp.core])) ; Temporary
 
+(def diag (atom nil))
+
 (defn row-ok?
   "Return true if the row has no violations."
   [p row-num]
@@ -12,6 +14,7 @@
   "Return true if all the rows have no violations."
   [p]
   (every? #(row-ok? p %) (range 0 8)))
+
 
 (defn col-ok?
   "Return true if the column has no violations."
@@ -38,31 +41,32 @@
 
 (defn get-block
   "Return a vector representing the argument block."
-  [p n]
+  [puz n]
   (let [[row col] (get bindex n)]
     (-> []
-        (into (let [r (nth p row)]       [(nth r col) (nth r (+ col 1)) (nth r (+ col 2))]))
-        (into (let [r (nth p (+ 1 row))] [(nth r col) (nth r (+ col 1)) (nth r (+ col 2))]))
-        (into (let [r (nth p (+ 2 row))] [(nth r col) (nth r (+ col 1)) (nth r (+ col 2))])))))
+        (into (let [r (nth puz row)]       [(nth r col) (nth r (+ col 1)) (nth r (+ col 2))]))
+        (into (let [r (nth puz (+ 1 row))] [(nth r col) (nth r (+ col 1)) (nth r (+ col 2))]))
+        (into (let [r (nth puz (+ 2 row))] [(nth r col) (nth r (+ col 1)) (nth r (+ col 2))])))))
 
 (defn block-ok?
   "Return true if the block of 9 numbers have no violations."
-  [p blk-num]
-   (->> (get-block p blk-num)
-        (remove #(= % 0))
-        (apply distinct?)))
+  [puz blk-num]
+   (as-> (get-block puz blk-num) ?b
+     (remove #(= % 0) ?b)
+     (or (empty? ?b)
+         (apply distinct? ?b))))
 
 (defn blocks-ok?
   "Return true if all the blocks have no violations."
-  [p]
-  (every? #(block-ok? p %) (range 1 10)))
+  [puz]
+  (every? #(block-ok? puz %) (range 1 10)))
 
 (defn puzzle-ok?
   "Return true if the puzzle has no violations."
-  [p]
-  (and (rows-ok? p)
-       (cols-ok? p)
-       (blocks-ok? p)))
+  [puz]
+  (and (rows-ok? puz)
+       (cols-ok? puz)
+       (blocks-ok? puz)))
 
 (defn row-col2block
   "Return the block number corresponding to the argument."
@@ -71,12 +75,12 @@
 
 (defn possible?
   "Return true if val is possible in the argument position."
-  [p row col val]
-  (and (->> (nth p row)
+  [puz row col val]
+  (and (->> (nth puz row)
             (not-any? #(= % val)))
-       (->> (map #(nth % col) p)
+       (->> (map #(nth % col) puz)
             (not-any? #(= % val)))
-       (->> (get-block p (row-col2block row col))
+       (->> (get-block puz (row-col2block row col))
             (not-any? #(= % val)))))
 
 (defn possible-vec
@@ -91,11 +95,11 @@
 
 (defn given?
   "Return the value or false if it is zero (unspecified)."
-  [p row col]
-  (let [val (nth (nth p row) col)]
+  [puz row col]
+  (let [val (nth (nth puz row) col)]
     (if (zero? val) false val)))
 
-(defn make-state
+(defn make-cell-state
   "Make a map describing the state of the argument position."
   [puz row col]
   {:r row :c col :possible (possible-vec puz row col)})
@@ -107,12 +111,12 @@
    (reduce (fn [res [r c]]
                 (if (given? puz r c)
                   res
-                  (update res :steps conj (make-state puz r c))))
+                  (update res :steps conj (make-cell-state puz r c))))
               {:puzzle puz :state '() :steps []}
               (for [row (range 9) col (range 9)] (vector row col)))
    (update :steps (fn [s] (sort-by #(-> % :possible count) s)))))
 
-(defn update-problem
+(defn update-steps
   "Puzzle has been changed; recalculate :steps, preserve :state."
   [prob]
   (as-> prob ?p
@@ -120,16 +124,18 @@
    (reduce (fn [prob [r c]]
              (if (given? (:puzzle prob) r c)
                prob
-               (update prob :steps conj (make-state (:puzzle prob) r c))))
+               (update prob :steps conj (make-cell-state (:puzzle prob) r c))))
            ?p
            (for [row (range 9) col (range 9)] (vector row col)))
    (update ?p :steps (fn [s] (sort-by #(-> % :possible count) s)))))
 
-(defn update-puzzle
+(defn update-cell
   "Return a problem with the puzzle updated."
   [puz r c val]
   (assoc-in puz [r c] val))
 
+;;; Each choice invalidates all steps, but since there is only one choice,
+;;; in deductive steps, we don't update the steps here, but in the caller.
 (defn solve-deductive
   "Update problem with all deductively solvable steps."
   [prob]
@@ -137,22 +143,24 @@
             (if (== 1 (-> s :possible count)) ; Update the puzzle with this value.
               (let [{:keys [r c possible]} s]
                 (-> prob
-                    (update :puzzle #(update-puzzle % r c (first possible)))
-                    (update :state conj {:r r :c c :val (first possible)}))) ; no :choice here. 
+                    (update :puzzle #(update-cell % r c (first possible)))
+                    (update :state conj {:r r :c c :val (first possible)}))) ; no :choice here.
               prob))
+          prob
           (:steps prob)))
 
 (defn solve-deductive-loop
   "Run through a loop of solve-deductive until there no deductive steps remaining."
   [prob]
   (loop [p prob]
-    (if (not-any? #(= 1 (count %)) (->> p :steps (map :possible)))
+    (if (not-any? #(== 1 (count %)) (->> p :steps (map :possible)))
       p
-      (recur (-> p solve-deductive update-problem))))) 
+      (recur (-> p solve-deductive update-steps))))) 
 
 (defn bad-choice?
   "Return true if the the puzzle cannot be solved as is."
   [prob]
+  (println "backtracking")
   (some empty? (->> prob :steps (map :possible))))
 
 (defn backtrack
@@ -164,40 +172,40 @@
           (-> p :state first :choice not-empty)   ; A choice point
           (let [{:keys [r c choice]} (-> p :state first)]
             (-> p
-                (update :puzzle #(update-puzzle % r c (first choice))) ; Update puzzle at choice...
+                (update :puzzle #(update-cell % r c (first choice))) ; Update puzzle at choice...
                 (update :state                 ; :state is a list!
                       (fn [s] (conj (rest s) ; ...prune the choice made from :choice
-                                    (update (first s) :choice #(-> % rest vec))))))), 
+                                    (update (first s) :choice #(-> % rest vec)))))
+                update-steps))
           :else                                      ; No choice here.
           (let [{:keys [r c]} (-> p :state first)]   ; Just back out of puzzle
-            (recur (-> p                             ; and continue.
-                       (update :puzzle #(update-puzzle % r c 0))
+            (recur (-> p                             ; and continue. (No need to update-steps yet.)
+                       (update :puzzle #(update-cell % r c 0))
                        (update :state pop)))))))
-
-(def diag (atom nil))
 
 (defn solve
   "Solve the Sudoku puzzle, if possible."
   [prob]
-  (loop [p (solve-deductive-loop prob)
+  (loop [p (-> prob solve-deductive-loop update-steps)
          cnt 0]
-    (reset! diag p)
-    #p p
-    (cond (> cnt 2) :break
+    (reset! diag {:p p})
+    (cond (> cnt 50) p ; This is just for diagnostics
           (-> p :steps empty?) p, ; Solved!
+          (not (puzzle-ok? (:puzzle p))) (assoc p :status :BUG!!!)
           (not p)   :unsolvable   ; No steps left, unsolvable.
           :else (recur (if (bad-choice? p)    ; Backtrack
-                         (-> p backtrack solve-deductive-loop)
+                         (-> p backtrack solve-deductive-loop update-steps)
                          (let [{:keys [r c possible]} (-> p :steps first)
                                others (-> possible rest vec)]
                            (-> p              ; Go forward from a choice point.
-                               (update :puzzle #(update-puzzle % r c (first possible)))
+                               (update :puzzle #(update-cell % r c (first possible)))
+                               (update :steps rest)
                                (update :state conj {:r r :c c :val (first possible) :choice others})
-                               solve-deductive-loop)))
+                               solve-deductive-loop
+                               update-steps)))
                        (inc cnt)))))
                 
 ;;;============================================= Testing Stuff =======================================
-
 (def example-bad
   [[0 1 5 3 6 0 0 0 0]
    [3 0 0 2 0 7 4 6 5]
