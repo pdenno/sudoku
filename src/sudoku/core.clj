@@ -73,6 +73,20 @@
   [row col]
   (+ 1 (* (quot row 3) 3) (quot col 3)))
 
+(defn not-ok
+  "Return the row and column which is not ok."
+  [puz]
+  (reduce (fn [bad [r c]]
+            (if (and (contains? bad :r) (contains? bad :c))
+              bad
+              (let [bnum (row-col2block r c)]
+                (cond-> bad
+                  (not (row-ok? puz r)) (assoc :r r)
+                  (not (col-ok? puz r)) (assoc :c c)
+                  (not (block-ok? puz bnum)) (-> (assoc :r r) (assoc :c c))))))
+          {}
+          (for [row (range 9) col (range 9)] (vector row col))))
+
 (defn possible?
   "Return true if val is possible in the argument position."
   [puz row col val]
@@ -83,14 +97,14 @@
        (->> (get-block puz (row-col2block row col))
             (not-any? #(= % val)))))
 
-(defn possible-vec
-  "Return a vector of what values are possible at the argument position."
+(defn possible-seq
+  "Return a sequence of what values are possible at the argument position."
   [puz row col]
   (reduce (fn [res val]
             (if (possible? puz row col val)
               (conj res val)
               res))
-          []
+          '()
           (range 1 10)))
 
 (defn given?
@@ -102,7 +116,7 @@
 (defn make-cell-state
   "Make a map describing the state of the argument position."
   [puz row col]
-  {:r row :c col :possible (possible-vec puz row col)})
+  {:r row :c col :possible (possible-seq puz row col)})
 
 (defn make-problem
   "Create a problem map from a puzzle, setting :steps and initialize :state to ()."
@@ -116,7 +130,7 @@
               (for [row (range 9) col (range 9)] (vector row col)))
    (update :steps (fn [s] (sort-by #(-> % :possible count) s)))))
 
-(defn update-steps
+(defn recompute-steps
   "Puzzle has been changed; recalculate :steps, preserve :state."
   [prob]
   (as-> prob ?p
@@ -134,9 +148,9 @@
   [puz r c val]
   (assoc-in puz [r c] val))
 
-;;; Each choice invalidates all steps, but since there is only one choice,
-;;; in deductive steps, we don't update the steps here, but in the caller.
-(defn solve-deductive
+;;; Each choice invalidates all steps, but since there is only 
+;;; one choice, we don't update the steps here, but in the caller.
+#_(defn solve-deductive
   "Update problem with all deductively solvable steps."
   [prob]
   (reduce (fn [prob s]
@@ -150,12 +164,24 @@
           (:steps prob)))
 
 (defn solve-deductive-loop
+  "Update problem with all deductively solvable steps."
+  [prob]
+  (loop [p prob]
+    (reset! diag {:p p})
+    (if (> (-> p :steps first :possible count) 1) p
+        (let [{:keys [r c possible]} (-> prob :steps first)]
+          (-> p
+              (update :puzzle #(update-cell % r c (first possible)))
+              (update :state conj {:r r :c c :val (first possible)})
+              recompute-steps)))))
+
+#_(defn solve-deductive-loop
   "Run through a loop of solve-deductive until there no deductive steps remaining."
   [prob]
   (loop [p prob]
     (if (not-any? #(== 1 (count %)) (->> p :steps (map :possible)))
       p
-      (recur (-> p solve-deductive update-steps))))) 
+      (recur (-> p solve-deductive recompute-steps))))) 
 
 (defn bad-choice?
   "Return true if the the puzzle cannot be solved as is."
@@ -174,35 +200,33 @@
             (-> p
                 (update :puzzle #(update-cell % r c (first choice))) ; Update puzzle at choice...
                 (update :state                 ; :state is a list!
-                      (fn [s] (conj (rest s) ; ...prune the choice made from :choice
-                                    (update (first s) :choice #(-> % rest vec)))))
-                update-steps))
+                        (fn [s] (conj (rest s) ; ...prune the choice made from :choice
+                                      {:r r :c c :choice (rest choice)})))
+                recompute-steps))
           :else                                      ; No choice here.
           (let [{:keys [r c]} (-> p :state first)]   ; Just back out of puzzle
-            (recur (-> p                             ; and continue. (No need to update-steps yet.)
+            (recur (-> p                             ; and continue. (No need to recompute-steps yet.)
                        (update :puzzle #(update-cell % r c 0))
                        (update :state pop)))))))
 
 (defn solve
   "Solve the Sudoku puzzle, if possible."
   [prob]
-  (loop [p (-> prob solve-deductive-loop update-steps)
+  (loop [p (-> prob solve-deductive-loop)
          cnt 0]
-    (reset! diag {:p p})
-    (cond (> cnt 50) p ; This is just for diagnostics
+    (cond (> cnt 500) p ; This is just for diagnostics
           (-> p :steps empty?) p, ; Solved!
-          (not (puzzle-ok? (:puzzle p))) (assoc p :status :BUG!!!)
+          (not (puzzle-ok? (:puzzle p))) (-> p (assoc :status :BUG!!!) (assoc :bad (not-ok (:puzzle p))))
           (not p)   :unsolvable   ; No steps left, unsolvable.
           :else (recur (if (bad-choice? p)    ; Backtrack
-                         (-> p backtrack solve-deductive-loop update-steps)
+                         (-> p backtrack solve-deductive-loop)
                          (let [{:keys [r c possible]} (-> p :steps first)
-                               others (-> possible rest vec)]
-                           (-> p              ; Go forward from a choice point.
+                               others (rest possible)]
+                           (-> p  ; Go forward from a choice point. (pop :steps, push on :state, update cell).
                                (update :puzzle #(update-cell % r c (first possible)))
-                               (update :steps rest)
                                (update :state conj {:r r :c c :val (first possible) :choice others})
-                               solve-deductive-loop
-                               update-steps)))
+                               recompute-steps
+                               solve-deductive-loop)))
                        (inc cnt)))))
                 
 ;;;============================================= Testing Stuff =======================================
@@ -228,7 +252,7 @@
    [7 4 0 0 0 5 0 0 9]
    [0 0 0 0 0 7 0 0 0]])
 
-(def moderate
+(def moderate ; puzzle 120. 
   [[0 8 0 0 0 0 0 0 0]
    [0 4 7 8 0 9 0 0 1]
    [0 0 1 4 5 0 0 2 0]
