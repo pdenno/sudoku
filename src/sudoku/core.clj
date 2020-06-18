@@ -148,53 +148,29 @@
   [puz r c val]
   (assoc-in puz [r c] val))
 
-;;; Each choice invalidates all steps, but since there is only 
-;;; one choice, we don't update the steps here, but in the caller.
-#_(defn solve-deductive
-  "Update problem with all deductively solvable steps."
-  [prob]
-  (reduce (fn [prob s]
-            (if (== 1 (-> s :possible count)) ; Update the puzzle with this value.
-              (let [{:keys [r c possible]} s]
-                (-> prob
-                    (update :puzzle #(update-cell % r c (first possible)))
-                    (update :state conj {:r r :c c :val (first possible)}))) ; no :choice here.
-              prob))
-          prob
-          (:steps prob)))
-
+;;; POD Should I do a recompute-steps before this. (Processing time goes up). 
 (defn solve-deductive-loop
   "Update problem with all deductively solvable steps."
   [prob]
   (loop [p prob]
-    (reset! diag {:p p})
-    (if (> (-> p :steps first :possible count) 1) p
+    (if (or (-> p :steps empty?)
+            (> (-> p :steps first :possible count) 1)) p
         (let [{:keys [r c possible]} (-> prob :steps first)]
           (-> p
               (update :puzzle #(update-cell % r c (first possible)))
               (update :state conj {:r r :c c :val (first possible)})
               recompute-steps)))))
 
-#_(defn solve-deductive-loop
-  "Run through a loop of solve-deductive until there no deductive steps remaining."
-  [prob]
-  (loop [p prob]
-    (if (not-any? #(== 1 (count %)) (->> p :steps (map :possible)))
-      p
-      (recur (-> p solve-deductive recompute-steps))))) 
-
 (defn bad-choice?
   "Return true if the the puzzle cannot be solved as is."
   [prob]
-  (println "backtracking")
   (some empty? (->> prob :steps (map :possible))))
 
 (defn backtrack
   "Backtrack out to the last unused choice and use it."
   [prob]
   (loop [p prob]
-    (cond (-> p :steps empty?)
-          nil, ; No backtracking possible
+    (cond (-> p :steps empty?) nil, ; No backtracking possible
           (-> p :state first :choice not-empty)   ; A choice point
           (let [{:keys [r c choice]} (-> p :state first)]
             (-> p
@@ -213,16 +189,15 @@
   "Solve the Sudoku puzzle, if possible."
   [prob]
   (loop [p (-> prob solve-deductive-loop)
-         cnt 0]
-    (cond (> cnt 500) p ; This is just for diagnostics
-          (-> p :steps empty?) p, ; Solved!
+         cnt 0] ; Just for debugging
+    (cond (-> p :steps empty?) (:puzzle p), ; Solved!
           (not (puzzle-ok? (:puzzle p))) (-> p (assoc :status :BUG!!!) (assoc :bad (not-ok (:puzzle p))))
           (not p)   :unsolvable   ; No steps left, unsolvable.
           :else (recur (if (bad-choice? p)    ; Backtrack
                          (-> p backtrack solve-deductive-loop)
                          (let [{:keys [r c possible]} (-> p :steps first)
                                others (rest possible)]
-                           (-> p  ; Go forward from a choice point. (pop :steps, push on :state, update cell).
+                           (-> p ; Go forward from a choice point. (pop :steps, push on :state, update cell).
                                (update :puzzle #(update-cell % r c (first possible)))
                                (update :state conj {:r r :c c :val (first possible) :choice others})
                                recompute-steps
