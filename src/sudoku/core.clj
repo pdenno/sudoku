@@ -6,22 +6,23 @@
 (defn row-ok?
   "Return true if the row has no violations."
   [p row-num]
-  (->> (nth p row-num)
-       (remove #(= % 0))
-       (apply distinct?)))
+  (as-> (nth p row-num) ?r
+    (remove #(= % 0) ?r)
+    (or (empty? ?r)
+        (apply distinct? ?r))))
 
 (defn rows-ok?
   "Return true if all the rows have no violations."
   [p]
   (every? #(row-ok? p %) (range 0 8)))
 
-
 (defn col-ok?
   "Return true if the column has no violations."
   [p col-num]
-  (->> (map #(nth % col-num) p)
-       (remove #(= % 0))
-       (apply distinct?)))
+  (as-> (map #(nth % col-num) p) ?c
+    (remove #(= % 0) ?c)
+    (or (empty? ?c)
+        (apply distinct? ?c))))
 
 (defn cols-ok?
   "Return true if all the columns have no violations."
@@ -97,7 +98,7 @@
        (->> (get-block puz (row-col2block row col))
             (not-any? #(= % val)))))
 
-(defn possible-seq
+(defn choices
   "Return a sequence of what values are possible at the argument position."
   [puz row col]
   (reduce (fn [res val]
@@ -116,7 +117,7 @@
 (defn make-cell-state
   "Make a map describing the state of the argument position."
   [puz row col]
-  {:r row :c col :possible (possible-seq puz row col)})
+  {:r row :c col :possible (choices puz row col)})
 
 (defn make-problem
   "Create a problem map from a puzzle, setting :steps and initialize :state to ()."
@@ -148,23 +149,24 @@
   [puz r c val]
   (assoc-in puz [r c] val))
 
+(defn bad-choice?
+  "Return true if the the puzzle cannot be solved as is."
+  [prob]
+  (-> prob :steps first :possible empty?))
+
 ;;; POD Should I do a recompute-steps before this. (Processing time goes up). 
 (defn solve-deductive-loop
   "Update problem with all deductively solvable steps."
   [prob]
   (loop [p prob]
-    (if (or (-> p :steps empty?)
-            (> (-> p :steps first :possible count) 1)) p
+    (if (or (-> p :steps empty?)  ; Completed!
+            (bad-choice? p)       ; Will need to backtrack.
+            (> (-> p :steps first :possible count) 1)) p ; choice point. 
         (let [{:keys [r c possible]} (-> prob :steps first)]
           (-> p
               (update :puzzle #(update-cell % r c (first possible)))
               (update :state conj {:r r :c c :val (first possible)})
               recompute-steps)))))
-
-(defn bad-choice?
-  "Return true if the the puzzle cannot be solved as is."
-  [prob]
-  (some empty? (->> prob :steps (map :possible))))
 
 (defn backtrack
   "Backtrack out to the last unused choice and use it."
@@ -248,5 +250,27 @@
    [0 0 0 0 5 0 0 0 7]
    [0 4 2 0 0 0 0 0 0]
    [0 0 0 0 0 0 0 0 2]])
+
+(def zeros
+  [[0 0 0 0 0 0 0 0 0]
+   [0 0 0 0 0 0 0 0 0]
+   [0 0 0 0 0 0 0 0 0]
+   [0 0 0 0 0 0 0 0 0]
+   [0 0 0 0 0 0 0 0 0]
+   [0 0 0 0 0 0 0 0 0]
+   [0 0 0 0 0 0 0 0 0]
+   [0 0 0 0 0 0 0 0 0]
+   [0 0 0 0 0 0 0 0 0]])
+
+(def c298
+  [[3 1 0 0 0 2 0 9 5]
+   [0 0 0 0 0 0 2 4 0]
+   [0 0 0 0 8 6 0 3 0]
+   [4 8 0 0 5 0 0 0 2]
+   [7 3 0 0 2 0 4 0 0]
+   [5 0 0 6 0 0 0 0 0]
+   [6 0 0 0 0 0 0 0 0]
+   [0 0 4 0 0 8 0 0 3]
+   [0 0 9 0 0 5 0 2 0]])
 
 (def prob (make-problem example))
